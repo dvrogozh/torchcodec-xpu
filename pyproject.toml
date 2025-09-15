@@ -1,0 +1,20 @@
+[project]
+name = "torchcodec-xpu"
+description = "Intel extension for torchcodec"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Dmitry Rogozhkin", email = "dmitry.v.rogozhkin@intel.com" },
+]
+dynamic = ["version"]
+
+[project.urls]
+GitHub = "https://github.com/dvrogozh/torchcodec-xpu"
+
+[tool.setuptools.dynamic]
+version = {file = "version.txt"}
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
