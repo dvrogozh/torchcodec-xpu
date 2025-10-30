@@ -37,7 +37,7 @@ def _get_extension_path(lib_name: str) -> str:
 
 def load_torchcodec_xpu_shared_library():
     exceptions = []
-    ffmpeg_major_version = torchcodec.variant
+    ffmpeg_major_version = torchcodec.ffmpeg_major_version
     xpu_library_name = f"libtorchcodec_xpu{ffmpeg_major_version}"
     try:
         ctypes.CDLL(torchcodec.core_library_path)
