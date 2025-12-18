@@ -3,12 +3,12 @@
 
 import ctypes
 import importlib
-import os
 import sys
+from pathlib import Path
+
 import torch
 import torchcodec
 
-from pathlib import Path
 
 def _get_extension_path(lib_name: str) -> str:
     extension_suffixes = []

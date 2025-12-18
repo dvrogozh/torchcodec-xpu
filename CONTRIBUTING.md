@@ -1,0 +1,57 @@
+# How to contribute
+
+Open an issue on Github if you've found a problem with the project or have a question.
+
+Submit a PR on Github to propose changes. Before doing so make sure that linter
+results are clean and tests are passing.
+
+Before running any checks, make sure to install the project with the test dependencies:
+
+```
+python3 -m pip install --no-build-isolation -vv -e ".[test]"
+```
+
+## How to run linter
+
+```
+ruff check
+```
+
+## How to run functional tests
+
+At the moment Intel Plugin for TorchCodec uses patched [TorchCodec] tests. To setup:
+
+```
+git clone https://github.com/dvrogozh/torchcodec.git && cd torchcodec
+git am $TORCHCODEC_XPU_PATH/patches/0001-Add-XPU-support-to-tests.patch
+```
+
+The patch is known to apply clean on TorchCodec versions `v0.9.0`, `v0.9.1`.
+
+Some of the [TorchCodec] tests require FFmpeg with enabled CPU audio and video decoders and encoders. New versions of [TorchCodec] might require more FFmpeg codecs to be enabled. If you self-build FFmpeg, consider to configure all the codec required by [TorchCodec] to reduce number of reported errors on a test run. Note that some of the codecs are GPL licensed. At the moment the following FFmpeg configuration is known to be required to pass [TorchCodec] tests:
+
+```
+# Install prerequisites (Ubuntu)
+apt-get install libmp3lame-dev libx264-dev libva-dev
+
+./configure \
+    --prefix=$HOME/_install \
+    --libdir=$HOME/_install/lib \
+    --disable-static \
+    --disable-stripping \
+    --disable-doc \
+    --enable-shared \
+    --enable-vaapi \
+    --enable-libmp3lame \
+    --enable-gpl \
+    --enable-libx264
+```
+
+Finally, execute the tests with:
+
+```
+cd torchcodec
+python3 -m pytest test/
+```
+
+[TorchCodec]: https://github.com/meta-pytorch/torchcodec
