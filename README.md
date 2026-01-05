@@ -11,7 +11,7 @@ To run:
 * Linux operating system
 * FFmpeg version 6 or later with enabled VAAPI hardware acceleration
 * PyTorch* with enabled XPU backend
-* TorchCodec version 0.9.0 or later
+* TorchCodec version of v0.9.x series
 
 Additionally, to build:
 * CMake 3.18 or later
@@ -23,6 +23,12 @@ Additionally, to build:
 
 ```
 pip3 install torch --index-url https://download.pytorch.org/whl/xpu
+```
+
+* Install TorchCodec version of v0.9.x series:
+
+```
+pip3 install torchcodec~=0.9.0 --index-url https://download.pytorch.org/whl/xpu
 ```
 
 * Install matching version of oneAPI:
