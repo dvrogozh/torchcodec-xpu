@@ -32,7 +32,12 @@ Some of the [TorchCodec] tests require FFmpeg with enabled CPU audio and video d
 
 ```
 # Install prerequisites (Ubuntu)
-apt-get install libmp3lame-dev libx264-dev libva-dev
+apt-get install \
+    libaom-dev \
+    libmp3lame-dev \
+    libx264-dev \
+    libva-dev \
+    libvpx-dev
 
 ./configure \
     --prefix=$HOME/_install \
@@ -44,7 +49,10 @@ apt-get install libmp3lame-dev libx264-dev libva-dev
     --enable-vaapi \
     --enable-libmp3lame \
     --enable-gpl \
-    --enable-libx264
+    --enable-libaom \
+    --enable-libx264 \
+    --enable-libvpx \
+    --libvpx-dev
 ```
 
 Finally, execute the tests with:
@@ -52,6 +60,14 @@ Finally, execute the tests with:
 ```
 cd torchcodec
 python3 -m pytest test/
+```
+
+If tests are flooding the tmpfs, consider to prune pytest directory or use other location:
+
+```
+sudo rm -rf /tmp/pytest-of-$(whoami)
+# or run as
+python3 -m pytest --basetemp=$HOME/tmp test/
 ```
 
 [TorchCodec]: https://github.com/meta-pytorch/torchcodec
