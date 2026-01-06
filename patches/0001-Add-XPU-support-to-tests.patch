@@ -1,4 +1,4 @@
-From 685063b320fb83aac6c1e9fa14d838b7e3fdb178 Mon Sep 17 00:00:00 2001
+From b0189f1fe8f367cb45981af3126e723ae3d515bf Mon Sep 17 00:00:00 2001
 From: Edgar Romo Montiel <edgar.romo.montiel@intel.com>
 Date: Tue, 9 Dec 2025 14:36:08 -0800
 Subject: [PATCH] Add XPU support to tests
@@ -7,8 +7,8 @@ Signed-off-by: Edgar Romo Montiel <edgar.romo.montiel@intel.com>
 ---
  test/conftest.py | 19 +++++++++++++++++--
  test/test_ops.py | 14 ++++++++++++++
- test/utils.py    | 18 ++++++++++++++++++
- 3 files changed, 49 insertions(+), 2 deletions(-)
+ test/utils.py    | 17 +++++++++++++++++
+ 3 files changed, 48 insertions(+), 2 deletions(-)
 
 diff --git a/test/conftest.py b/test/conftest.py
 index fa674bf..91ef29b 100644
@@ -73,17 +73,17 @@ index fa674bf..91ef29b 100644
 +    if torch.xpu.is_available():
 +        torch.xpu.set_rng_state(xpu_rng_state)
 diff --git a/test/test_ops.py b/test/test_ops.py
-index 0ec4515..bd8d5db 100644
+index 0ec4515..76c8a09 100644
 --- a/test/test_ops.py
 +++ b/test/test_ops.py
-@@ -47,6 +47,7 @@ from .utils import (
-     NASA_AUDIO_MP3,
+@@ -48,6 +48,7 @@ from .utils import (
      NASA_VIDEO,
      needs_cuda,
-+    needs_xpu,
      needs_ffmpeg_cli,
++    needs_xpu,
      SINE_MONO_S32,
      SINE_MONO_S32_44100,
+     SINE_MONO_S32_8000,
 @@ -650,6 +651,19 @@ class TestVideoDecoderOps:
              duration, torch.tensor(0.0334).double(), atol=0, rtol=1e-3
          )
@@ -105,18 +105,10 @@ index 0ec4515..bd8d5db 100644
  class TestAudioDecoderOps:
      @pytest.mark.parametrize(
 diff --git a/test/utils.py b/test/utils.py
-index 6f4c77b..ae211d9 100644
+index cd735cf..f0f874e 100644
 --- a/test/utils.py
 +++ b/test/utils.py
-@@ -12,6 +12,7 @@ import pytest
- 
- import torch
- 
-+import torchcodec_xpu
- from torchcodec._core import get_ffmpeg_library_versions
- from torchcodec.decoders import set_cuda_backend, VideoDecoder
- from torchcodec.decoders._video_decoder import _read_custom_frame_mappings
-@@ -26,6 +27,13 @@ def needs_cuda(test_item):
+@@ -28,6 +28,13 @@ def needs_cuda(test_item):
      return pytest.mark.needs_cuda(test_item)
  
  
@@ -130,7 +122,7 @@ index 6f4c77b..ae211d9 100644
  # Decorator for skipping ffmpeg tests when ffmpeg cli isn't available. The tests are
  # effectively marked to be skipped in pytest_collection_modifyitems() of
  # conftest.py
-@@ -48,6 +56,7 @@ def all_supported_devices():
+@@ -50,6 +57,7 @@ def all_supported_devices():
          "cpu",
          pytest.param("cuda", marks=pytest.mark.needs_cuda),
          pytest.param(_CUDA_BETA_DEVICE_STR, marks=pytest.mark.needs_cuda),
@@ -138,7 +130,7 @@ index 6f4c77b..ae211d9 100644
      )
  
  
-@@ -147,6 +156,15 @@ def assert_frames_equal(*args, **kwargs):
+@@ -156,6 +164,15 @@ def assert_frames_equal(*args, **kwargs):
                  )
              else:
                  torch.testing.assert_close(*args, **kwargs, atol=atol, rtol=0)
