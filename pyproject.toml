@@ -16,6 +16,9 @@ dynamic = ["version"]
 [project.urls]
 GitHub = "https://github.com/dvrogozh/torchcodec-xpu"
 
+[project.entry-points.'torchcodec.backends']
+device_backend = 'torchcodec_xpu:load_torchcodec_xpu_shared_library'
+
 [tool.setuptools.dynamic]
 version = {file = "version.txt"}
 

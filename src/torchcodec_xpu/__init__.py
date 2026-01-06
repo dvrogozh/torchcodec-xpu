@@ -63,6 +63,3 @@ def load_torchcodec_xpu_shared_library():
         """
         f"{traceback}"
     )
-
-load_torchcodec_xpu_shared_library()
-
