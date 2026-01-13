@@ -12,6 +12,13 @@ uv venv && uv pip install torch~=2.10.0 -e ".[test]" \
   --index https://download.pytorch.org/whl/xpu -vv
 ```
 
+To try experimental SYCL color conversion kernel, build the project with `CXX=icpx`
+compiler:
+
+```
+CXX=icpx python3 -m pip install --no-build-isolation -vv -e ".[test]"
+```
+
 ## How to run linter
 
 ```
