@@ -13,7 +13,8 @@ class XpuDeviceInterface : public DeviceInterface {
   virtual ~XpuDeviceInterface();
 
   std::optional<const AVCodec*> findCodec(
-      const AVCodecID& codecId) override;
+      const AVCodecID& codecId,
+      bool isDecoder = true) override;
 
   void initialize(
       const AVStream* avStream,
