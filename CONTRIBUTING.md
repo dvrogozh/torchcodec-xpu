@@ -37,7 +37,8 @@ apt-get install \
     libmp3lame-dev \
     libx264-dev \
     libva-dev \
-    libvpx-dev
+    libvpx-dev \
+    libx265-dev
 
 ./configure \
     --prefix=$HOME/_install \
