@@ -52,7 +52,7 @@ apt-get install \
     --enable-libaom \
     --enable-libx264 \
     --enable-libvpx \
-    --libvpx-dev
+    --enable-libx265
 ```
 
 Finally, execute the tests with:
