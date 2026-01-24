@@ -191,6 +191,7 @@ torch::Tensor AVFrameToTensor(
   bool is_rgb = false;
 
   if (is_tiled) {
+    printf(">>>>> TILED\n");
     // Tiled Memory path: Map (De-tile) -> Upload NV12 -> SYCL Kernel (Bilinear)
     // Moving workload to GPU while maintaining high quality via improved kernel.
     
@@ -198,6 +199,7 @@ torch::Tensor AVFrameToTensor(
     VASurfaceID surfaceID = (VASurfaceID)(uintptr_t)frame->data[3];
     VAImage image;
 
+# if 0
     // 1. Create a VAImage to perform the De-Tiling copy on driver side
     VAImageFormat val_fmt = {VA_FOURCC_NV12, VA_LSB_FIRST, 12, 0, 0, 0, 0, 0, {}};
     sts = vaCreateImage(vaDisplay, &val_fmt, desc.width, desc.height, &image);
@@ -206,11 +208,25 @@ torch::Tensor AVFrameToTensor(
     // 2. Derive Image (Copy Surface -> Image)
     sts = vaGetImage(vaDisplay, surfaceID, 0, 0, desc.width, desc.height, image.image_id);
     TORCH_CHECK(sts == VA_STATUS_SUCCESS, "vaGetImage failed: ", vaErrorStr(sts));
+#endif
+
+    sts = vaDeriveImage(vaDisplay, surfaceID, &image);
+    TORCH_CHECK(sts == VA_STATUS_SUCCESS, "vaDeriveImage failed: ", vaErrorStr(sts));
 
     // 3. Map Buffer to Host (Result is Linear NV12 in Host Memory)
     void* host_addr = nullptr;
     sts = vaMapBuffer(vaDisplay, image.buf, &host_addr);
     TORCH_CHECK(sts == VA_STATUS_SUCCESS, "vaMapBuffer failed: ", vaErrorStr(sts));
+
+    printf(">>> image.format.fourcc=%x\n", image.format.fourcc);
+    printf(">>> image.num_planes=%d\n", image.num_planes);
+    printf(">>> image.width=%d\n", image.width);
+    printf(">>> image.height=%d\n", image.height);
+    printf(">>> image.pitches[0]=%d\n", image.pitches[0]);
+    printf(">>> image.pitches[1]=%d\n", image.pitches[1]);
+    printf(">>> image.offsets[0]=%d\n", image.offsets[0]);
+    printf(">>> image.offsets[1]=%d\n", image.offsets[1]);
+
 
     int w = frame->width;
     int h = frame->height;
@@ -258,7 +274,7 @@ torch::Tensor AVFrameToTensor(
     queue.memcpy(dev_uv, host_uv, uv_size).wait();
 
     // 7. Run High-Quality SYCL Kernel (Bilinear)
-    convertNV12ToRGB((uint8_t*)dev_y, (uint8_t*)dev_uv, (uint8_t*)usm_ptr, w, h, stride, queue, color_std);
+    convertNV12ToRGB(queue, (uint8_t*)dev_y, (uint8_t*)dev_uv, (uint8_t*)usm_ptr, w, h, stride, !color_std);
 
     // 8. Cleanup Temporary Device Memory
     zeMemFree(context->zeCtx, dev_y);
@@ -273,6 +289,7 @@ torch::Tensor AVFrameToTensor(
     is_rgb = true;
 
   } else {
+    printf(">>>>> LINEAR\n");
     // Linear path (Zero Copy)
     ze_external_memory_import_fd_t import_fd_desc{};
     import_fd_desc.stype = ZE_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMPORT_FD;
@@ -363,6 +380,8 @@ void XpuDeviceInterface::convertAVFrameToFrameOutput(
     std::optional<torch::Tensor> preAllocatedOutputTensor) {
   // TODO: consider to copy handling of CPU frame from CUDA
   // TODO: consider to copy NV12 format check from CUDA
+  //
+  printf(">>>>>>>>>>>>> HEELLOO\n");
   TORCH_CHECK(
       avFrame->format == AV_PIX_FMT_VAAPI,
       "Expected format to be AV_PIX_FMT_VAAPI, got " +
@@ -455,15 +474,20 @@ void XpuDeviceInterface::convertAVFrameToFrameOutput(
   
   auto start = std::chrono::high_resolution_clock::now();
 
+  /*double rgb2yuv[3][3], yuv2rgb[3];
+  double tmp_mat[3][3];
+  ff_fill_rgb2yuv_table(s->in_lumacoef, rgb2yuv);
+  ff_matrix_invert_3x3(rgb2yuv, &yuv2rgb);*/
+
   convertNV12ToRGB(
+      queue,
       y_ptr,
       uv_ptr,
       (uint8_t*)dst.data_ptr(),
       frameDims.width,
       frameDims.height,
       stride,
-      queue,
-      color_std
+      !color_std
   );
 
   auto end = std::chrono::high_resolution_clock::now();

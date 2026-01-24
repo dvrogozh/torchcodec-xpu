@@ -18,7 +18,7 @@ else()
         # TODO set warnings as errors on Windows as well.
         # set(TORCHCODEC_XPU_WERROR_OPTION "/WX")
     else()
-        set(TORCHCODEC_XPU_WERROR_OPTION "-Werror")
+	    #set(TORCHCODEC_XPU_WERROR_OPTION "-Werror")
     endif()
 endif()
 
