@@ -69,12 +69,10 @@ python3 -m pip install --no-build-isolation -vv -e .
 
 # How to use
 
-Import the project in your Python script to register Intel device
-interface for the TorchCodec:
+TorchCodec will automatically load Intel Plugin if it is installed on the system via python packages entry point mechanism. No explcit project importing is required. Proceed by importing TorchCodec as usual:
 
 ```
 import torchcodec
-import torchcodec_xpu
 ```
 
 Before executing, make sure to export environment variables to point to FFmpeg installation:
@@ -82,6 +80,12 @@ Before executing, make sure to export environment variables to point to FFmpeg i
 ```
 export PATH=$HOME/_install/bin:$PATH
 export LD_LIBRARY_PATH=$HOME/_install/lib:$LD_LIBRARY_PATH
+```
+
+Note that it is possible to disable auto loading by exporting the following environment variable:
+
+```
+export TORCHCODEC_DEVICE_BACKEND_AUTOLOAD=0
 ```
 
 [Getting Started on Intel GPU]: https://docs.pytorch.org/docs/stable/notes/get_start_xpu.html
