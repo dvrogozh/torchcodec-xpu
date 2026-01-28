@@ -623,26 +623,14 @@ void XpuDeviceInterface::convertAVFrameToFrameOutput(
   }
   
   // ===== DISPATCHER: HARDCODED SELECTION =====
-  //
-  // The key decision point: which backend to use?
-  // This is evaluated at compile-time (zero overhead)
-  //
   if (USE_SYCL_COLOR_CONVERSION_KERNEL) {
-    // ===== BRANCH A: SYCL Kernel =====
-    // Fast, direct NV12→RGB conversion
-    // Limited to NV12 format
-    // High performance for tiled/linear surfaces
+    
     convertAVFrameToFrameOutput_SYCL(avFrame, frameOutput, preAllocatedOutputTensor);
   } else {
-    // ===== BRANCH B: VAAPI Filter Graph =====
-    // Flexible, handles multiple formats
-    // Supports scaling via scale_vaapi filter
-    // Converts via RGBA intermediate (4 channels)
+    
     convertAVFrameToFrameOutput_FilterGraph(avFrame, frameOutput, preAllocatedOutputTensor);
   }
   
-  // ===== POST-PROCESSING (Common to Both) =====
-  // (Any common cleanup or validation here)
 }
 
 
