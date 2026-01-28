@@ -26,7 +26,7 @@ git clone https://github.com/dvrogozh/torchcodec.git && cd torchcodec
 git am $TORCHCODEC_XPU_PATH/patches/0001-Add-XPU-support-to-tests.patch
 ```
 
-The patch is known to apply clean on TorchCodec versions `v0.9.0`, `v0.9.1`.
+The patch is known to apply clean on TorchCodec versions: `v0.10.0`.
 
 Some of the [TorchCodec] tests require FFmpeg with enabled CPU audio and video decoders and encoders. New versions of [TorchCodec] might require more FFmpeg codecs to be enabled. If you self-build FFmpeg, consider to configure all the codec required by [TorchCodec] to reduce number of reported errors on a test run. Note that some of the codecs are GPL licensed. At the moment the following FFmpeg configuration is known to be required to pass [TorchCodec] tests:
 
@@ -56,6 +56,12 @@ apt-get install \
     --enable-libvpx
 ```
 
+TorchCodec tests require some additional packages. Install them as follows:
+
+```
+python3 -m pip install torchvision
+```
+
 Finally, execute the tests with:
 
 ```
@@ -71,4 +77,18 @@ sudo rm -rf /tmp/pytest-of-$(whoami)
 python3 -m pytest --basetemp=$HOME/tmp test/
 ```
 
+# Build and tips
+
+Use the following compatibility table when self-building TorchCodec and its dependencies or using specific versions:
+
+| PyTorch | Torchvision | oneAPI   |
+| ------- | ----------- | -------- |
+| 2.10    | 0.25        | [2025.3] |
+| 2.9     | 0.24        | [2025.2] |
+| 2.8     | 0.23        | [2025.1] |
+
 [TorchCodec]: https://github.com/meta-pytorch/torchcodec
+
+[2025.3]: https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpu/2-10.html
+[2025.2]: https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpu/2-9.html
+[2025.1]: https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpu/2-8.html
