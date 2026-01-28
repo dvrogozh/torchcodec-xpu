@@ -11,7 +11,7 @@ To run:
 * Linux operating system
 * FFmpeg version 6 or later with enabled VAAPI hardware acceleration
 * PyTorch* with enabled XPU backend
-* TorchCodec version of v0.9.x series
+* TorchCodec version of v0.10.x series
 
 Additionally, to build:
 * CMake 3.18 or later
@@ -19,25 +19,19 @@ Additionally, to build:
 
 # How to build
 
-* Install PyTorch with enabled XPU backend. For details refer to [Getting Started on Intel GPU].
+* Install PyTorch v2.10.x with enabled XPU backend. For details refer to [Getting Started on Intel GPU].
 
 ```
-pip3 install torch --index-url https://download.pytorch.org/whl/xpu
+pip3 install torch~=2.10.0 --index-url https://download.pytorch.org/whl/xpu
 ```
 
-* Install TorchCodec version of v0.9.x series:
+* Install TorchCodec version of v0.10.x series:
 
 ```
-pip3 install torchcodec~=0.9.0 --index-url https://download.pytorch.org/whl/xpu
+pip3 install torchcodec~=0.10.0
 ```
 
-* Install matching version of oneAPI:
-
-| PyTorch | oneAPI   |
-| ------- | -------- |
-| 2.10    | [2025.3] |
-| 2.9     | [2025.2] |
-| 2.8     | [2025.1] |
+* Install matching version of oneAPI [2025.3]
 
 * Install FFmpeg with enabled VAAPI hardware acceleration. For example:
 
@@ -88,5 +82,3 @@ export LD_LIBRARY_PATH=$HOME/_install/lib:$LD_LIBRARY_PATH
 [TorchCodec]: https://github.com/meta-pytorch/torchcodec
 
 [2025.3]: https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpu/2-10.html
-[2025.2]: https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpu/2-9.html
-[2025.1]: https://www.intel.com/content/www/us/en/developer/articles/tool/pytorch-prerequisites-for-intel-gpu/2-8.html
