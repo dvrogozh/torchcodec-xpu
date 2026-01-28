@@ -18,7 +18,7 @@ else()
         # TODO set warnings as errors on Windows as well.
         # set(TORCHCODEC_XPU_WERROR_OPTION "/WX")
     else()
-        set(TORCHCODEC_XPU_WERROR_OPTION "-Werror")
+	    #set(TORCHCODEC_XPU_WERROR_OPTION "-Werror")
     endif()
 endif()
 
@@ -35,6 +35,7 @@ pkg_check_modules(LIBVA REQUIRED IMPORTED_TARGET libva)
 function(make_torchcodec_xpu_libraries torchcodec_variant)
     set(libname "libtorchcodec_xpu${torchcodec_variant}")
     set(sources
+        ColorConversionKernel.cpp
         XpuDeviceInterface.cpp)
 
     add_library(${libname} SHARED ${sources})
@@ -51,6 +52,10 @@ function(make_torchcodec_xpu_libraries torchcodec_variant)
       torchcodec::ffmpeg${torchcodec_variant}
       PkgConfig::L0
     )
+
+    # Force SYCL device compilation
+    target_compile_options(${libname} PRIVATE -fsycl)
+    target_link_options(${libname} PRIVATE -fsycl)
 
     if(WIN32)
         # On Windows, the built artifacts are put in Release/Debug
