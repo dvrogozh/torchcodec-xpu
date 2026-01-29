@@ -48,6 +48,14 @@ class XpuDeviceInterface : public DeviceInterface {
   // Used to know whether a new FilterGraphContext should
   // be created before decoding a new frame.
   FiltersContext prevFiltersContext_;
+
+  void convertAVFrameToFrameOutput_SYCL(
+      UniqueAVFrame& avFrame,
+      torch::Tensor& dst);
+
+  void convertAVFrameToFrameOutput_FilterGraph(
+      UniqueAVFrame& avFrame,
+      torch::Tensor& dst);
 };
 
 } // namespace facebook::torchcodec
