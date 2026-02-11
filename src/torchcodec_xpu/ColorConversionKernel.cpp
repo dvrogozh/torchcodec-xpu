@@ -94,6 +94,115 @@ struct NV12toRGBKernel {
   }
 };
 
+
+// Detach tiling implementation.
+struct DetileNV12Kernel{
+  sycl::accessor<uint8_t, 1, sycl::access::mode::read> tiled_y_acc;
+  sycl::accessor<uint8_t, 1, sycl::access::mode::read> tiled_uv_acc;
+  sycl::accessor<uint8_t, 1, sycl::access::mode::write> linear_y_acc;
+  sycl::accessor<uint8_t, 1, sycl::access::mode::write> linear_uv_acc;
+  int width;
+  int height;
+  int stride;
+
+  DetileNV12Kernel(
+    sycl::accessor<uint8_t, 1, sycl::access::mode::read> tiled_y_acc,
+    sycl::accessor<uint8_t, 1, sycl::access::mode::read> tiled_uv_acc,
+    sycl::accessor<uint8_t, 1, sycl::access::mode::write> linear_y_acc,
+    sycl::accessor<uint8_t, 1, sycl::access::mode::write> linear_uv_acc,
+    int width,
+    int height,
+    int stride):
+    tiled_y_acc(tiled_y_acc),
+    tiled_uv_acc(tiled_uv_acc),
+    linear_y_acc(linear_y_acc),
+    linear_uv_acc(linear_uv_acc),
+    width(width),
+    height(height),
+    stride(stride)
+    {}
+
+
+  void operator()(sycl::id<2> idx) const{
+    int x = idx[1];
+    int y = idx[0];
+
+    if (x >= width || y >= height) return;
+
+    auto get_offset_tile_y = [](int x, int y, int stride) -> size_t {
+    const int TileW = 128;  // Tile width in bytes
+    const int TileH = 32;   // Tile height in rows
+    const int OWordSize = 16; // OWord = 16 bytes
+    const int TileSize = TileW * TileH;  // 4096 bytes per tile
+    
+    // Which tile does this pixel belong to?
+    int tile_x = x / TileW;
+    int tile_y = y / TileH;
+    
+    // Position within the tile
+    int x_in_tile = x % TileW;
+    int y_in_tile = y % TileH;
+    
+
+    // Block position added to remove swap of 64-byte blocks in the tile (TileY XOR pattern)
+    int block_x = x_in_tile / 64;  // width of pixel blocks
+    int block_y = y_in_tile / 4;   // heigh of pixel blocks
+
+
+
+    // Y-Tiling: Column-major OWord layout
+    // OWord index (0-7): which 16-byte column within the tile
+    int oword_idx = x_in_tile / OWordSize;
+    // Offset within OWord (0-15)
+    int offset_in_oword = x_in_tile % OWordSize;
+
+    int sub_tile_size = OWordSize * 4;
+    int sub_tile_y = y_in_tile / 4;
+    int y_in_sub_tile = y_in_tile % 4;
+
+    // conditional to remove swap of 64-byte blocks in the tile (TileY XOR pattern)
+    if ((block_x ^ block_y ) & 0x1){
+        block_x ^= 1;
+        block_y ^= 1;
+
+        x_in_tile = block_x * 64 + (x_in_tile % 64);
+        y_in_tile = block_y * 4 + (y_in_tile % 4);
+
+        sub_tile_y = block_y;
+        y_in_sub_tile = y_in_tile % 4;
+
+        oword_idx = x_in_tile / OWordSize;
+        offset_in_oword = x_in_tile % 16;
+
+    }
+    
+    int offset_in_tile = (sub_tile_y * TileW/OWordSize + oword_idx) * sub_tile_size + y_in_sub_tile * OWordSize + offset_in_oword;
+
+    // Number of tiles per row
+    int stride_in_tiles = stride / TileW;
+    
+    // Final tiled offset
+    size_t tile_offset = (size_t)(tile_y * stride_in_tiles + tile_x) * TileSize;
+    return tile_offset + offset_in_tile;
+    };
+
+    // Detile Y Plane
+    size_t linear_idx_y = (size_t)y * stride + x;
+    size_t tiled_idx_y = get_offset_tile_y(x, y, stride);
+    linear_y_acc[linear_idx_y] = tiled_y_acc[tiled_idx_y];
+
+    // Detile UV Plane (half height for NV12)
+    // UV samples are interleaved: U0,V0,U1,V1,... in a row
+    if (y < height / 2) {
+        size_t linear_idx_uv = (size_t)y * stride + x;
+        size_t tiled_idx_uv = get_offset_tile_y(x, y, stride);
+        linear_uv_acc[linear_idx_uv] = tiled_uv_acc[tiled_idx_uv];
+    }
+
+  }
+
+};
+
 void convertNV12ToRGB(
     sycl::queue& queue,
     const uint8_t* y_plane,
@@ -129,14 +238,51 @@ void convertNV12ToRGB(
   queue.wait();
 }
 
+void detileNV12(
+    sycl::queue& queue,
+    const uint8_t* tiled_y_plane,
+    const uint8_t* tiled_uv_plane,
+    uint8_t* linear_y_output,
+    uint8_t* linear_uv_output,
+    int width,
+    int height,
+    int stride) {
+    
+  size_t y_size = stride * height;
+  size_t uv_size = stride * height / 2;
+  
+  // Create buffers
+  sycl::buffer<uint8_t, 1> tiled_y_buf(tiled_y_plane, sycl::range<1>(y_size));
+  sycl::buffer<uint8_t, 1> tiled_uv_buf(tiled_uv_plane, sycl::range<1>(uv_size));
+  sycl::buffer<uint8_t, 1> linear_y_buf(linear_y_output, sycl::range<1>(y_size));
+  sycl::buffer<uint8_t, 1> linear_uv_buf(linear_uv_output, sycl::range<1>(uv_size));
+  
+  queue.submit([&](sycl::handler& cgh) {
+    auto tiled_y_acc = tiled_y_buf.get_access<sycl::access::mode::read>(cgh);
+    auto tiled_uv_acc = tiled_uv_buf.get_access<sycl::access::mode::read>(cgh);
+    auto linear_y_acc = linear_y_buf.get_access<sycl::access::mode::write>(cgh);
+    auto linear_uv_acc = linear_uv_buf.get_access<sycl::access::mode::write>(cgh);
+    
+    DetileNV12Kernel kernel(
+      tiled_y_acc, tiled_uv_acc, linear_y_acc, linear_uv_acc,
+      width, height, stride);
+    
+    cgh.parallel_for(sycl::range<2>(height, width), kernel);
+  });
+  
+  queue.wait();
+}
+
 // This function is called during library initialization to ensure
 // the SYCL runtime registers the kernel associated with this type.
 void registerColorConversionKernel() {
   // Creating a dummy pointer to the kernel type is often enough
   // to force the compiler to emit the necessary RTTI/integration info.
   // We use volatile to prevent optimization.
-  volatile size_t s = sizeof(NV12toRGBKernel);
-  (void)s;
+  volatile size_t s1 = sizeof(NV12toRGBKernel);
+  volatile size_t s2 = sizeof(DetileNV12Kernel);
+  (void)s1; (void)s2;
 }
+
 
 } // namespace facebook::torchcodec

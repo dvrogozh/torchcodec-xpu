@@ -177,8 +177,8 @@ void deleter(DLManagedTensor* self) {
   std::unique_ptr<DLManagedTensor> tensor(self);
   std::unique_ptr<xpuManagerCtx> context((xpuManagerCtx*)self->manager_ctx);
   zeMemFree(context->zeCtx, self->dl_tensor.data);
-  free(self->dl_tensor.shape);
-  free(self->dl_tensor.strides);
+  //free(self->dl_tensor.shape);
+  //free(self->dl_tensor.strides);
 }
 
 torch::Tensor AVFrameToTensor(
@@ -416,6 +416,8 @@ void XpuDeviceInterface::convertAVFrameToFrameOutput_SYCL(
         });
       })
       .wait();
+  
+  bool is_tiled = (desc.objects[0].drm_format_modifier != 0);
 
   ze_external_memory_import_fd_t import_fd_desc{};
   import_fd_desc.stype = ZE_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMPORT_FD;
@@ -437,6 +439,22 @@ void XpuDeviceInterface::convertAVFrameToFrameOutput_SYCL(
       res == ZE_RESULT_SUCCESS, "Failed to import fd=", desc.objects[0].fd);
 
   close(desc.objects[0].fd);
+
+  if(is_tiled ) {
+    // Temperal buffers
+    std::vector<uint8_t> linear_y(desc.layers[0].pitch[0] * desc.height);
+    std::vector<uint8_t> linear_uv(desc.layers[0].pitch[0] * desc.height /2);
+
+    // cCall the detach tiling kernel
+    detileNV12(
+      queue,
+      (uint8_t*)usm_ptr + desc.layers[0].offset[0],
+      (uint8_t*)usm_ptr + desc.layers[1].offset[0],
+      linear_y.data(),
+      linear_uv.data(),
+      desc.width, desc.height,
+      desc.layers[0].pitch[0]);
+  }
 
   convertNV12ToRGB(
       queue,
