@@ -314,10 +314,10 @@ void XpuDeviceInterface::convertAVFrameToFrameOutput(
   auto start = std::chrono::high_resolution_clock::now();
 
   if (use_sycl_color_conversion_kernel()) {
-    printf("Using SYCL kernel backend for conversion\n");
+    // printf("Using SYCL kernel backend for conversion\n");
     convertAVFrameToFrameOutput_SYCL(avFrame, dst);
   } else {
-    printf("Using VAAPI filter graph backend for conversion\n");
+    // printf("Using VAAPI filter graph backend for conversion\n");
     convertAVFrameToFrameOutput_FilterGraph(avFrame, dst);
   }
 
@@ -395,14 +395,14 @@ void XpuDeviceInterface::convertAVFrameToFrameOutput_SYCL(
 
   TORCH_CHECK(desc.num_objects == 1, "Expected 1 fd, got ", desc.num_objects);
 
-  printf(">>>> desc.objects[0].drm_format_modifier=%lx\n", desc.objects[0].drm_format_modifier);
+  /* printf(">>>> desc.objects[0].drm_format_modifier=%lx\n", desc.objects[0].drm_format_modifier);
   printf(">>> desc.num_layers=%d\n", desc.num_layers);
   printf(">>> desc.layers[0].num_planes=%d\n", desc.layers[0].num_planes);
   printf(">>> desc.layers[0].offset[0]=%d\n", desc.layers[0].offset[0]);
   printf(">>> desc.layers[0].pitch[0]=%d\n", desc.layers[0].pitch[0]);
   printf(">>> desc.layers[1].offset[0]=%d\n", desc.layers[1].offset[0]);
   printf(">>> desc.layers[1].pitch[0]=%d\n", desc.layers[1].pitch[0]);
-
+ */
   std::unique_ptr<xpuManagerCtx> context = std::make_unique<xpuManagerCtx>();
   ze_device_handle_t ze_device{};
   sycl::queue queue = c10::xpu::getCurrentXPUStream(device_.index());
@@ -419,55 +419,124 @@ void XpuDeviceInterface::convertAVFrameToFrameOutput_SYCL(
   
   bool is_tiled = (desc.objects[0].drm_format_modifier != 0);
 
-  ze_external_memory_import_fd_t import_fd_desc{};
-  import_fd_desc.stype = ZE_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMPORT_FD;
-  import_fd_desc.flags = ZE_EXTERNAL_MEMORY_TYPE_FLAG_DMA_BUF;
-  import_fd_desc.fd = desc.objects[0].fd;
-
-  ze_device_mem_alloc_desc_t alloc_desc{};
-  alloc_desc.pNext = &import_fd_desc;
   void* usm_ptr = nullptr;
 
-  ze_result_t res = zeMemAllocDevice(
-      context->zeCtx,
-      &alloc_desc,
+  if(is_tiled ) {
+    // Import tiled frames to device memory
+    ze_external_memory_import_fd_t import_fd_desc{};
+    import_fd_desc.stype = ZE_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMPORT_FD;
+    import_fd_desc.flags = ZE_EXTERNAL_MEMORY_TYPE_FLAG_DMA_BUF;
+    import_fd_desc.fd = desc.objects[0].fd;
+
+    ze_device_mem_alloc_desc_t alloc_dev = {};
+    alloc_dev.stype = ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC;
+    alloc_dev.pNext = &import_fd_desc;
+    alloc_dev.ordinal = 0;
+
+    void* tiled_device_ptr = nullptr;
+    ze_result_t res = zeMemAllocDevice(
+      context -> zeCtx,
+      &alloc_dev,
       desc.objects[0].size,
       0,
       ze_device,
-      &usm_ptr);
-  TORCH_CHECK(
-      res == ZE_RESULT_SUCCESS, "Failed to import fd=", desc.objects[0].fd);
+      &tiled_device_ptr
+    );
+    
+    TORCH_CHECK(res == ZE_RESULT_SUCCESS, "zeMemAllocDevice (tiled import) failed");
 
-  close(desc.objects[0].fd);
+    // calculate buffer size (linear)
+    uint32_t physical_stride = desc.layers[0].pitch[0];
+    size_t y_linear_size = physical_stride * desc.height;
+    size_t uv_linear_size = physical_stride * (desc.height /2);
 
-  if(is_tiled ) {
-    // Temperal buffers
-    std::vector<uint8_t> linear_y(desc.layers[0].pitch[0] * desc.height);
-    std::vector<uint8_t> linear_uv(desc.layers[0].pitch[0] * desc.height /2);
+    // allocate output buffer on device (linear after detiling)
+    void* linear_y_ptr = nullptr;
+    void* linear_uv_ptr = nullptr;
 
-    // cCall the detach tiling kernel
+    // create descriptor for linear allocations
+    ze_device_mem_alloc_desc_t alloc_linear = {};
+    alloc_linear.stype = ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC;
+    alloc_linear.pNext = nullptr;
+    alloc_linear.ordinal = 0;
+
+    res = zeMemAllocDevice(context -> zeCtx, &alloc_linear, y_linear_size, 0, ze_device, &linear_y_ptr);
+    TORCH_CHECK(res == ZE_RESULT_SUCCESS, "zeMemAllocDevice (linear Y) failed)");
+
+    res = zeMemAllocDevice(context -> zeCtx, &alloc_linear, uv_linear_size, 0, ze_device, &linear_uv_ptr);
+    TORCH_CHECK(res == ZE_RESULT_SUCCESS, "zeMemAllocDevice (linear UV) failed");
+
+    // Call custom detiling
+    uint8_t* tiled_y_ptr = (uint8_t*)tiled_device_ptr + desc.layers[0].offset[0];
+    uint8_t* tiled_uv_ptr = nullptr;
+    // Handle both single-layer and multi-layer UV descriptors
+    if (desc.num_layers > 1) {
+      // Multi-layer: separate Y and UV layers
+      tiled_uv_ptr = (uint8_t*)tiled_device_ptr + desc.layers[1].offset[0];
+    } else if (desc.layers[0].num_planes >= 2) {
+      // Single layer with multiple planes: use plane offset
+      tiled_uv_ptr = (uint8_t*)tiled_device_ptr + desc.layers[0].offset[1];
+    } else {
+      TORCH_CHECK(false, "Cannot determine UV plane offset: layers=", desc.num_layers, 
+                  ", planes=", desc.layers[0].num_planes);
+    }
+
+    // Validate pointers are within allocated buffer
+    size_t y_offset_from_base = (size_t)tiled_y_ptr - (size_t)tiled_device_ptr;
+    size_t uv_offset_from_base = (size_t)tiled_uv_ptr - (size_t)tiled_device_ptr;
+    
+    TORCH_CHECK(y_offset_from_base < desc.objects[0].size, 
+                "Y plane offset ", y_offset_from_base, " exceeds buffer size ", desc.objects[0].size);
+    TORCH_CHECK(uv_offset_from_base < desc.objects[0].size,
+                "UV plane offset ", uv_offset_from_base, " exceeds buffer size ", desc.objects[0].size);
+    TORCH_CHECK(linear_y_ptr != nullptr && linear_uv_ptr != nullptr,
+                "Linear buffers not allocated");
+
+    
+  // Call the detach tiling kernel
     detileNV12(
-      queue,
-      (uint8_t*)usm_ptr + desc.layers[0].offset[0],
-      (uint8_t*)usm_ptr + desc.layers[1].offset[0],
-      linear_y.data(),
-      linear_uv.data(),
-      desc.width, desc.height,
-      desc.layers[0].pitch[0]);
-  }
+      tiled_y_ptr,
+      tiled_uv_ptr,
+      (uint8_t*)linear_y_ptr,
+      (uint8_t*)linear_uv_ptr,
+      desc.width, 
+      desc.height,
+      physical_stride,
+      queue);
 
-  convertNV12ToRGB(
-      queue,
-      (uint8_t*)usm_ptr + desc.layers[0].offset[0],
-      (uint8_t*)usm_ptr + desc.layers[1].offset[0],
-      (uint8_t*)dst.data_ptr(),
+    // allocate memory for rgb output on the device
+    size_t rgb_size = frame->width * frame->height * 3;
+    
+    ze_device_mem_alloc_desc_t alloc_rgb = {};
+    alloc_rgb.stype = ZE_STRUCTURE_TYPE_DEVICE_MEM_ALLOC_DESC;
+    alloc_rgb.pNext = nullptr;
+    alloc_rgb.ordinal = 0;
+
+    res = zeMemAllocDevice(context -> zeCtx, &alloc_rgb, rgb_size, 0, ze_device, &usm_ptr);
+    TORCH_CHECK(res == ZE_RESULT_SUCCESS, "zeMemoAllocDevice (RGB) failed")
+
+    // Convert to RGB outut
+    convertNV12ToRGB(
+      (uint8_t*)linear_y_ptr,
+      (uint8_t*)linear_uv_ptr,
+      (uint8_t*)usm_ptr,
       frame->width,
       frame->height,
       desc.layers[0].pitch[0],
+      queue,
       false);
 
-  zeMemFree(context->zeCtx, usm_ptr);
-}
+    queue.memcpy(dst.data_ptr<uint8_t>(), usm_ptr, rgb_size).wait();
+
+    zeMemFree(context->zeCtx, tiled_device_ptr);
+    zeMemFree(context->zeCtx, linear_y_ptr);
+    zeMemFree(context->zeCtx, linear_uv_ptr);
+    zeMemFree(context->zeCtx, usm_ptr); 
+
+    ////is_rgb = true;
+    }
+
+  }
 
 // inspired by https://github.com/FFmpeg/FFmpeg/commit/ad67ea9
 // we have to do this because of an FFmpeg bug where hardware decoding is not
