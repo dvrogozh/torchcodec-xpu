@@ -20,6 +20,64 @@ const float3x3 rgb_matrix_bt709 = {
 //  { 1.0, 1.772, 0.0}
 //};
 
+// Helper function for the Intel Tile-Y offset calculation
+// Intel Y-Tiling uses COLUMN-MAJOR OWord (16 bytes) organization
+// Tile: 128 bytes wide × 32 rows = 4KB
+// Within tile: 8 OWords (16-byte columns) arranged column-by-column
+// Each OWord covers all 32 rows before moving to next OWord
+size_t get_tile_offset(int x, int y, int stride) {
+  const int TileW = 128;  // Tile width in bytes
+  const int TileH = 32;   // Tile height in rows
+  const int OWordSize = 16; // OWord = 16 bytes
+  const int TileSize = TileW * TileH;  // 4096 bytes per tile
+
+  // Which tile does this pixel belong to?
+  int tile_x = x / TileW;
+  int tile_y = y / TileH;
+
+  // Position within the tile
+  int x_in_tile = x % TileW;
+  int y_in_tile = y % TileH;
+
+  // Block position added to remove swap of 64-byte blocks in the tile (TileY XOR pattern)
+  int block_x = x_in_tile / 64;  // width of pixel blocks
+  int block_y = y_in_tile / 4;   // heigh of pixel blocks
+
+  // Y-Tiling: Column-major OWord layout
+  // OWord index (0-7): which 16-byte column within the tile
+  int oword_idx = x_in_tile / OWordSize;
+  // Offset within OWord (0-15)
+  int offset_in_oword = x_in_tile % OWordSize;
+
+  int sub_tile_size = OWordSize * 4;
+  int sub_tile_y = y_in_tile / 4;
+  int y_in_sub_tile = y_in_tile % 4;
+
+  // conditional to remove swap of 64-byte blocks in the tile (TileY XOR pattern)
+  if ((block_x ^ block_y ) & 0x1){
+    block_x ^= 1;
+    block_y ^= 1;
+
+    x_in_tile = block_x * 64 + (x_in_tile % 64);
+    y_in_tile = block_y * 4 + (y_in_tile % 4);
+
+    sub_tile_y = block_y;
+    y_in_sub_tile = y_in_tile % 4;
+
+    oword_idx = x_in_tile / OWordSize;
+    offset_in_oword = x_in_tile % 16;
+  }
+
+  int offset_in_tile = (sub_tile_y * TileW/OWordSize + oword_idx) * sub_tile_size + y_in_sub_tile * OWordSize + offset_in_oword;
+
+  // Number of tiles per row
+  int stride_in_tiles = stride / TileW;
+
+  // Final tiled offset
+  size_t tile_offset = (size_t)(tile_y * stride_in_tiles + tile_x) * TileSize;
+  return tile_offset + offset_in_tile;
+}
+
 sycl::uchar3 yuv2rgb(uint8_t y, uint8_t u, uint8_t v, bool fullrange, const float3x3 &rgb_matrix) {
   sycl::float3 src;
   if (fullrange) {
@@ -41,9 +99,9 @@ sycl::uchar3 yuv2rgb(uint8_t y, uint8_t u, uint8_t v, bool fullrange, const floa
 }
 
 struct NV12toRGBKernel {
-  sycl::accessor<uint8_t, 1, sycl::access::mode::read> y_acc;
-  sycl::accessor<uint8_t, 1, sycl::access::mode::read> uv_acc;
-  sycl::accessor<uint8_t, 1, sycl::access::mode::write> rgb_acc;
+  const uint8_t* y_plane;
+  const uint8_t* uv_plane;
+  uint8_t* rgb_output;
   int width;
   int height;
   int stride;
@@ -51,17 +109,17 @@ struct NV12toRGBKernel {
   float3x3 rgb_matrix;
 
   NV12toRGBKernel(
-      sycl::accessor<uint8_t, 1, sycl::access::mode::read> y_acc,
-      sycl::accessor<uint8_t, 1, sycl::access::mode::read> uv_acc,
-      sycl::accessor<uint8_t, 1, sycl::access::mode::write> rgb_acc,
+      const uint8_t* y_plane,
+      const uint8_t* uv_plane,
+      uint8_t* rgb_output,
       int width,
       int height,
       int stride,
       bool fullrange,
       const float3x3 &rgb_matrix):
-    y_acc(y_acc),
-    uv_acc(uv_acc),
-    rgb_acc(rgb_acc),
+    y_plane(y_plane),
+    uv_plane(uv_plane),
+    rgb_output(rgb_output),
     width(width),
     height(height),
     stride(stride),
@@ -80,17 +138,21 @@ struct NV12toRGBKernel {
     int ux = sycl::floor(yx/2.0);
     int uy = sycl::floor(yy/2.0);
 
-    uint8_t y = y_acc[yy * stride + yx];
-    uint8_t u = uv_acc[uy * stride + ux * 2];
-    uint8_t v = uv_acc[uy * stride + ux * 2 + 1];
+    size_t tiled_idx_y = get_tile_offset(yx, yy, stride);
+    size_t tiled_idx_u = get_tile_offset(2*ux, uy, stride);
+    size_t tiled_idx_v = get_tile_offset(2*ux+1, uy, stride);
+
+    uint8_t y = y_plane[tiled_idx_y];
+    uint8_t u = uv_plane[tiled_idx_u];
+    uint8_t v = uv_plane[tiled_idx_v];
 
     sycl::uchar3 rgb = yuv2rgb(y, u, v, fullrange, rgb_matrix);
 
     int rgb_idx = 3 * (yy * width + yx);
 
-    rgb_acc[rgb_idx + 0] = rgb.x();
-    rgb_acc[rgb_idx + 1] = rgb.y();
-    rgb_acc[rgb_idx + 2] = rgb.z();
+    rgb_output[rgb_idx + 0] = rgb.x();
+    rgb_output[rgb_idx + 1] = rgb.y();
+    rgb_output[rgb_idx + 2] = rgb.z();
   }
 };
 
@@ -103,21 +165,9 @@ void convertNV12ToRGB(
     int height,
     int stride,
     bool fullrange) {
-  size_t y_size = stride * height;
-  size_t uv_size = stride * height / 2;
-  size_t rgb_size = width * height * 3;
-
-  sycl::buffer<uint8_t, 1> y_buf(y_plane, sycl::range<1>(y_size));
-  sycl::buffer<uint8_t, 1> uv_buf(uv_plane, sycl::range<1>(uv_size));
-  sycl::buffer<uint8_t, 1> rgb_buf(rgb_output, sycl::range<1>(rgb_size));
-
   queue.submit([&](sycl::handler& cgh) {
-    auto y_acc = y_buf.get_access<sycl::access::mode::read>(cgh);
-    auto uv_acc = uv_buf.get_access<sycl::access::mode::read>(cgh);
-    auto rgb_acc = rgb_buf.get_access<sycl::access::mode::write>(cgh);
-
     NV12toRGBKernel kernel(
-      y_acc, uv_acc, rgb_acc,
+      y_plane, uv_plane, rgb_output,
       width, height, stride,
       fullrange, rgb_matrix_bt709);
 

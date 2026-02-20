@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Dmitry Rogozhkin.
 
 #include <unistd.h>
-#include <cstdlib>
+#include <stdlib.h>
 #include <string>
 #include <unordered_map>
 
