@@ -49,9 +49,11 @@ class XpuDeviceInterface : public DeviceInterface {
   // be created before decoding a new frame.
   FiltersContext prevFiltersContext_;
 
+  #ifdef USE_SYCL
   void convertAVFrameToFrameOutput_SYCL(
       UniqueAVFrame& avFrame,
       torch::Tensor& dst);
+  #endif
 
   void convertAVFrameToFrameOutput_FilterGraph(
       UniqueAVFrame& avFrame,

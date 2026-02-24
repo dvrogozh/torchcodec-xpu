@@ -11,17 +11,16 @@
 #include <ATen/DLConvertor.h>
 #include <c10/xpu/XPUStream.h>
 
+#ifdef USE_SYCL
 #include "ColorConversionKernel.h"
-
-extern "C" {
-#include <libswscale/swscale.h>
-}
+#endif
 
 #include "Cache.h"
 #include "FFMPEGCommon.h"
 #include "XpuDeviceInterface.h"
 
 extern "C" {
+#include <libswscale/swscale.h>
 #include <libavfilter/buffersink.h>
 #include <libavfilter/buffersrc.h>
 #include <libavutil/hwcontext_vaapi.h>
@@ -60,10 +59,14 @@ bool to_bool(std::string str) {
 }
 
 bool use_sycl_color_conversion_kernel() {
-  if (!USE_SYCL_COLOR_CONVERSION_KERNEL) {
-    return true;
-  }
-  return to_bool(USE_SYCL_COLOR_CONVERSION_KERNEL);
+  #ifndef USE_SYCL
+    return false;
+  #else
+    if (!USE_SYCL_COLOR_CONVERSION_KERNEL) {
+      return true;
+    }
+    return to_bool(USE_SYCL_COLOR_CONVERSION_KERNEL);
+  #endif
 }
 
 UniqueAVBufferRef getVaapiContext(const torch::Device& device) {
@@ -124,10 +127,10 @@ XpuDeviceInterface::XpuDeviceInterface(const torch::Device& device)
   ctx_ = getVaapiContext(device_);
 
   if (use_sycl_color_conversion_kernel()) {
-    std::cout << "XpuDeviceInterface initialized with SYCL kernel backend" << std::endl;
+    VLOG(1) << "XpuDeviceInterface initialized with SYCL kernel backend";
     VLOG(1) << "Backend: SYCL_KERNEL (Direct NV12→RGB)";
   } else {
-    std::cout << "XpuDeviceInterface initialized with VAAPI filter graph backend" << std::endl;
+    VLOG(1) << "XpuDeviceInterface initialized with VAAPI filter graph backend";
     VLOG(1) << "Backend: VAAPI_FILTER (Flexible, with scaling)";
   }
 }
@@ -177,8 +180,8 @@ void deleter(DLManagedTensor* self) {
   std::unique_ptr<DLManagedTensor> tensor(self);
   std::unique_ptr<xpuManagerCtx> context((xpuManagerCtx*)self->manager_ctx);
   zeMemFree(context->zeCtx, self->dl_tensor.data);
-  free(self->dl_tensor.shape);
-  free(self->dl_tensor.strides);
+  //free(self->dl_tensor.shape);
+  //free(self->dl_tensor.strides);
 }
 
 torch::Tensor AVFrameToTensor(
@@ -312,14 +315,16 @@ void XpuDeviceInterface::convertAVFrameToFrameOutput(
   }
 
   auto start = std::chrono::high_resolution_clock::now();
-
+  #ifdef USE_SYCL
   if (use_sycl_color_conversion_kernel()) {
-    printf("Using SYCL kernel backend for conversion\n");
+    VLOG(1) << "Using SYCL kernel backend for conversion";
     convertAVFrameToFrameOutput_SYCL(avFrame, dst);
-  } else {
-    printf("Using VAAPI filter graph backend for conversion\n");
+  } 
+  #else 
+    VLOG(1) << "Using VAAPI filter graph backend for conversion";
     convertAVFrameToFrameOutput_FilterGraph(avFrame, dst);
-  }
+  
+  #endif
 
   auto end = std::chrono::high_resolution_clock::now();
 
@@ -380,75 +385,71 @@ void XpuDeviceInterface::convertAVFrameToFrameOutput_FilterGraph(
 void XpuDeviceInterface::convertAVFrameToFrameOutput_SYCL(
     UniqueAVFrame& frame,
     torch::Tensor& dst) {
-  TORCH_CHECK_EQ(frame->format, AV_PIX_FMT_VAAPI);
-  VADRMPRIMESurfaceDescriptor desc{};
-  VAStatus sts = vaExportSurfaceHandle(
-      getVaDisplayFromAV(frame.get()),
-      (VASurfaceID)(uintptr_t)frame->data[3],
-      VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
-      VA_EXPORT_SURFACE_READ_ONLY,
-      &desc);
-  TORCH_CHECK(
-      sts == VA_STATUS_SUCCESS,
-      "vaExportSurfaceHandle failed: ",
-      vaErrorStr(sts));
+  #ifdef USE_SYCL
+      TORCH_CHECK_EQ(frame->format, AV_PIX_FMT_VAAPI);
+      VADRMPRIMESurfaceDescriptor desc{};
+      VAStatus sts = vaExportSurfaceHandle(
+          getVaDisplayFromAV(frame.get()),
+          (VASurfaceID)(uintptr_t)frame->data[3],
+          VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
+          VA_EXPORT_SURFACE_READ_ONLY,
+          &desc);
+      TORCH_CHECK(
+          sts == VA_STATUS_SUCCESS,
+          "vaExportSurfaceHandle failed: ",
+          vaErrorStr(sts));
 
-  TORCH_CHECK(desc.num_objects == 1, "Expected 1 fd, got ", desc.num_objects);
+      TORCH_CHECK(desc.num_objects == 1, "Expected 1 fd, got ", desc.num_objects);
+      std::unique_ptr<xpuManagerCtx> context = std::make_unique<xpuManagerCtx>();
+      ze_device_handle_t ze_device{};
+      sycl::queue queue = c10::xpu::getCurrentXPUStream(device_.index());
+      queue
+          .submit([&](sycl::handler& cgh) {
+            cgh.host_task([&](const sycl::interop_handle& ih) {
+              context->zeCtx =
+                  ih.get_native_context<sycl::backend::ext_oneapi_level_zero>();
+              ze_device =
+                  ih.get_native_device<sycl::backend::ext_oneapi_level_zero>();
+            });
+          })
+          .wait();
 
-  printf(">>>> desc.objects[0].drm_format_modifier=%lx\n", desc.objects[0].drm_format_modifier);
-  printf(">>> desc.num_layers=%d\n", desc.num_layers);
-  printf(">>> desc.layers[0].num_planes=%d\n", desc.layers[0].num_planes);
-  printf(">>> desc.layers[0].offset[0]=%d\n", desc.layers[0].offset[0]);
-  printf(">>> desc.layers[0].pitch[0]=%d\n", desc.layers[0].pitch[0]);
-  printf(">>> desc.layers[1].offset[0]=%d\n", desc.layers[1].offset[0]);
-  printf(">>> desc.layers[1].pitch[0]=%d\n", desc.layers[1].pitch[0]);
+      ze_external_memory_import_fd_t import_fd_desc{};
+      import_fd_desc.stype = ZE_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMPORT_FD;
+      import_fd_desc.flags = ZE_EXTERNAL_MEMORY_TYPE_FLAG_DMA_BUF;
+      import_fd_desc.fd = desc.objects[0].fd;
 
-  std::unique_ptr<xpuManagerCtx> context = std::make_unique<xpuManagerCtx>();
-  ze_device_handle_t ze_device{};
-  sycl::queue queue = c10::xpu::getCurrentXPUStream(device_.index());
-  queue
-      .submit([&](sycl::handler& cgh) {
-        cgh.host_task([&](const sycl::interop_handle& ih) {
-          context->zeCtx =
-              ih.get_native_context<sycl::backend::ext_oneapi_level_zero>();
-          ze_device =
-              ih.get_native_device<sycl::backend::ext_oneapi_level_zero>();
-        });
-      })
-      .wait();
+      ze_device_mem_alloc_desc_t alloc_desc{};
+      alloc_desc.pNext = &import_fd_desc;
+      void* usm_ptr = nullptr;
 
-  ze_external_memory_import_fd_t import_fd_desc{};
-  import_fd_desc.stype = ZE_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMPORT_FD;
-  import_fd_desc.flags = ZE_EXTERNAL_MEMORY_TYPE_FLAG_DMA_BUF;
-  import_fd_desc.fd = desc.objects[0].fd;
+      ze_result_t res = zeMemAllocDevice(
+          context->zeCtx,
+          &alloc_desc,
+          desc.objects[0].size,
+          0,
+          ze_device,
+          &usm_ptr);
+      TORCH_CHECK(
+          res == ZE_RESULT_SUCCESS, "Failed to import fd=", desc.objects[0].fd);
 
-  ze_device_mem_alloc_desc_t alloc_desc{};
-  alloc_desc.pNext = &import_fd_desc;
-  void* usm_ptr = nullptr;
+      close(desc.objects[0].fd);
 
-  ze_result_t res = zeMemAllocDevice(
-      context->zeCtx,
-      &alloc_desc,
-      desc.objects[0].size,
-      0,
-      ze_device,
-      &usm_ptr);
-  TORCH_CHECK(
-      res == ZE_RESULT_SUCCESS, "Failed to import fd=", desc.objects[0].fd);
+      convertNV12ToRGB(
+          queue,
+          (uint8_t*)usm_ptr + desc.layers[0].offset[0],
+          (uint8_t*)usm_ptr + desc.layers[1].offset[0],
+          (uint8_t*)dst.data_ptr(),
+          frame->width,
+          frame->height,
+          desc.layers[0].pitch[0],
+          false);
 
-  close(desc.objects[0].fd);
-
-  convertNV12ToRGB(
-      queue,
-      (uint8_t*)usm_ptr + desc.layers[0].offset[0],
-      (uint8_t*)usm_ptr + desc.layers[1].offset[0],
-      (uint8_t*)dst.data_ptr(),
-      frame->width,
-      frame->height,
-      desc.layers[0].pitch[0],
-      false);
-
-  zeMemFree(context->zeCtx, usm_ptr);
+      zeMemFree(context->zeCtx, usm_ptr);
+            
+  #else
+        TORCH_CHECK(false, "SYCL kernel support is not in use");
+  #endif
 }
 
 // inspired by https://github.com/FFmpeg/FFmpeg/commit/ad67ea9

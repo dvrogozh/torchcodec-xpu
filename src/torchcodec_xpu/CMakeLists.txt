@@ -16,9 +16,9 @@ if(DEFINED TORCHCODEC_XPU_DISABLE_COMPILE_WARNING_AS_ERROR AND TORCHCODEC_XPU_DI
 else()
     if (WIN32)
         # TODO set warnings as errors on Windows as well.
-        # set(TORCHCODEC_XPU_WERROR_OPTION "/WX")
+        set(TORCHCODEC_XPU_WERROR_OPTION "/WX")
     else()
-	    #set(TORCHCODEC_XPU_WERROR_OPTION "-Werror")
+	    set(TORCHCODEC_XPU_WERROR_OPTION "-Werror")
     endif()
 endif()
 
@@ -35,8 +35,17 @@ pkg_check_modules(LIBVA REQUIRED IMPORTED_TARGET libva)
 function(make_torchcodec_xpu_libraries torchcodec_variant)
     set(libname "libtorchcodec_xpu${torchcodec_variant}")
     set(sources
-        ColorConversionKernel.cpp
+        #ColorConversionKernel.cpp
         XpuDeviceInterface.cpp)
+
+    if($ENV{CXX} MATCHES "icpx")
+        set (USE_SYCL ON)
+        list(APPEND sources ColorConversionKernel.cpp)
+        message(STATUS "Intel compiler in use, Sycl support enabled")
+    else()
+        set (USE_SYCL OFF)
+        message(STATUS "Non-Intel compiler in use, Sycl support disabled")
+    endif()
 
     add_library(${libname} SHARED ${sources})
     # Avoid adding the "lib" prefix which we already add explicitly.
@@ -54,8 +63,17 @@ function(make_torchcodec_xpu_libraries torchcodec_variant)
     )
 
     # Force SYCL device compilation
-    target_compile_options(${libname} PRIVATE -fsycl)
-    target_link_options(${libname} PRIVATE -fsycl)
+    ##target_compile_options(${libname} PRIVATE -fsycl)
+    ##target_link_options(${libname} PRIVATE -fsycl)
+
+
+    # option to detect icpx compiler
+    if(USE_SYCL)
+        target_compile_options(${libname} PRIVATE -fsycl)
+        target_link_options(${libname} PRIVATE -fsycl)
+        target_compile_definitions(${libname} PRIVATE USE_SYCL=1)
+    endif()
+
 
     if(WIN32)
         # On Windows, the built artifacts are put in Release/Debug

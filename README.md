@@ -57,6 +57,7 @@ cd torchcodec-xpu
 # If ffmpeg was installed per above example
 export PKG_CONFIG_PATH=$HOME/_install/lib/pkgconfig
 export LD_LIBRARY_PATH=$HOME/_install/lib:$LD_LIBRARY_PATH
+export CXX=icpx
 
 python3 -m pip install --no-build-isolation -vv -e .
 ```
