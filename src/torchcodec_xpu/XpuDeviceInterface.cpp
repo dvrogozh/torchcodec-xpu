@@ -12,11 +12,6 @@
 #include <c10/xpu/XPUStream.h>
 
 #include "ColorConversionKernel.h"
-
-extern "C" {
-#include <libswscale/swscale.h>
-}
-
 #include "Cache.h"
 #include "FFMPEGCommon.h"
 #include "XpuDeviceInterface.h"
@@ -45,7 +40,7 @@ const int MAX_CONTEXTS_PER_GPU_IN_CACHE = -1;
 PerGpuCache<AVBufferRef, Deleterp<AVBufferRef, void, av_buffer_unref>>
     g_cached_hw_device_ctxs(MAX_XPU_GPUS, MAX_CONTEXTS_PER_GPU_IN_CACHE);
 
-bool to_bool(std::string str) {
+inline bool to_bool(std::string str) {
     static const std::unordered_map<std::string, bool> bool_map = {
         {"1", true},  {"0", false},
         {"on", true}, {"off", false},
@@ -59,11 +54,16 @@ bool to_bool(std::string str) {
     return false;
 }
 
-bool use_sycl_color_conversion_kernel() {
+inline bool use_sycl_color_conversion_kernel() {
+#ifndef USE_SYCL
+  return false;
+#else
   if (!USE_SYCL_COLOR_CONVERSION_KERNEL) {
+    // By default attempt to convert with sycl (optimized path).
     return true;
   }
   return to_bool(USE_SYCL_COLOR_CONVERSION_KERNEL);
+#endif
 }
 
 UniqueAVBufferRef getVaapiContext(const torch::Device& device) {
@@ -124,10 +124,10 @@ XpuDeviceInterface::XpuDeviceInterface(const torch::Device& device)
   ctx_ = getVaapiContext(device_);
 
   if (use_sycl_color_conversion_kernel()) {
-    std::cout << "XpuDeviceInterface initialized with SYCL kernel backend" << std::endl;
+    VLOG(1) << "XpuDeviceInterface initialized with SYCL kernel backend";
     VLOG(1) << "Backend: SYCL_KERNEL (Direct NV12→RGB)";
   } else {
-    std::cout << "XpuDeviceInterface initialized with VAAPI filter graph backend" << std::endl;
+    VLOG(1) << "XpuDeviceInterface initialized with VAAPI filter graph backend";
     VLOG(1) << "Backend: VAAPI_FILTER (Flexible, with scaling)";
   }
 }
@@ -312,12 +312,7 @@ void XpuDeviceInterface::convertAVFrameToFrameOutput(
   }
 
   auto start = std::chrono::high_resolution_clock::now();
-
-  if (use_sycl_color_conversion_kernel()) {
-    printf("Using SYCL kernel backend for conversion\n");
-    convertAVFrameToFrameOutput_SYCL(avFrame, dst);
-  } else {
-    printf("Using VAAPI filter graph backend for conversion\n");
+  if (!convertAVFrameToFrameOutput_SYCL(avFrame, dst)) {
     convertAVFrameToFrameOutput_FilterGraph(avFrame, dst);
   }
 
@@ -331,6 +326,7 @@ void XpuDeviceInterface::convertAVFrameToFrameOutput(
 void XpuDeviceInterface::convertAVFrameToFrameOutput_FilterGraph(
     UniqueAVFrame& avFrame,
     torch::Tensor& dst) {
+  VLOG(1) << "Using VAAPI filter graph backend for conversion";
   auto frameDims = FrameDims(avFrame->height, avFrame->width);
 
   // We need to compare the current frame context with our previous frame
@@ -377,9 +373,16 @@ void XpuDeviceInterface::convertAVFrameToFrameOutput_FilterGraph(
   dst.copy_(dst_rgb4.narrow(2, 0, 3));
 }
 
-void XpuDeviceInterface::convertAVFrameToFrameOutput_SYCL(
-    UniqueAVFrame& frame,
-    torch::Tensor& dst) {
+bool XpuDeviceInterface::convertAVFrameToFrameOutput_SYCL(
+    [[maybe_unused]] UniqueAVFrame& frame,
+    [[maybe_unused]] torch::Tensor& dst) {
+  bool converted = false;
+  if (!use_sycl_color_conversion_kernel()) {
+    return converted;
+  }
+
+#ifdef USE_SYCL
+  VLOG(1) << "Using SYCL kernel backend for conversion";
   TORCH_CHECK_EQ(frame->format, AV_PIX_FMT_VAAPI);
   VADRMPRIMESurfaceDescriptor desc{};
   VAStatus sts = vaExportSurfaceHandle(
@@ -394,15 +397,6 @@ void XpuDeviceInterface::convertAVFrameToFrameOutput_SYCL(
       vaErrorStr(sts));
 
   TORCH_CHECK(desc.num_objects == 1, "Expected 1 fd, got ", desc.num_objects);
-
-  printf(">>>> desc.objects[0].drm_format_modifier=%lx\n", desc.objects[0].drm_format_modifier);
-  printf(">>> desc.num_layers=%d\n", desc.num_layers);
-  printf(">>> desc.layers[0].num_planes=%d\n", desc.layers[0].num_planes);
-  printf(">>> desc.layers[0].offset[0]=%d\n", desc.layers[0].offset[0]);
-  printf(">>> desc.layers[0].pitch[0]=%d\n", desc.layers[0].pitch[0]);
-  printf(">>> desc.layers[1].offset[0]=%d\n", desc.layers[1].offset[0]);
-  printf(">>> desc.layers[1].pitch[0]=%d\n", desc.layers[1].pitch[0]);
-
   std::unique_ptr<xpuManagerCtx> context = std::make_unique<xpuManagerCtx>();
   ze_device_handle_t ze_device{};
   sycl::queue queue = c10::xpu::getCurrentXPUStream(device_.index());
@@ -449,6 +443,9 @@ void XpuDeviceInterface::convertAVFrameToFrameOutput_SYCL(
       false);
 
   zeMemFree(context->zeCtx, usm_ptr);
+  converted = true;
+#endif
+  return converted;
 }
 
 // inspired by https://github.com/FFmpeg/FFmpeg/commit/ad67ea9

@@ -1,8 +1,9 @@
 // Copyright (c) 2025 Dmitry Rogozhkin.
 
+#ifdef USE_SYCL
+
 #include "ColorConversionKernel.h"
 #include <algorithm> // For std::clamp
-#include <cmath>
 
 namespace facebook::torchcodec {
 
@@ -190,3 +191,4 @@ void registerColorConversionKernel() {
 }
 
 } // namespace facebook::torchcodec
+#endif // USE_SYCL

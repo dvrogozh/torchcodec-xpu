@@ -11,6 +11,13 @@ Before running any checks, make sure to install the project with the test depend
 python3 -m pip install --no-build-isolation -vv -e ".[test]"
 ```
 
+To try experimental SYCL color conversion kernel, build the project with `CXX=icpx`
+compiler:
+
+```
+CXX=icpx python3 -m pip install --no-build-isolation -vv -e ".[test]"
+```
+
 ## How to run linter
 
 ```

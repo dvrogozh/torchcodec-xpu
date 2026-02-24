@@ -49,10 +49,12 @@ class XpuDeviceInterface : public DeviceInterface {
   // be created before decoding a new frame.
   FiltersContext prevFiltersContext_;
 
-  void convertAVFrameToFrameOutput_SYCL(
+  // Optimized conversion. Return value indicates if conversion was
+  // successfull.
+  bool convertAVFrameToFrameOutput_SYCL(
       UniqueAVFrame& avFrame,
       torch::Tensor& dst);
-
+  // Fallback conversion if optimized path is not available.
   void convertAVFrameToFrameOutput_FilterGraph(
       UniqueAVFrame& avFrame,
       torch::Tensor& dst);

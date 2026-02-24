@@ -2,6 +2,8 @@
 
 #pragma once
 
+#ifdef USE_SYCL
+
 #include <sycl/sycl.hpp>
 #include <cstdint>
 
@@ -22,3 +24,4 @@ void registerColorConversionKernel();
 
 } // namespace facebook::torchcodec
 
+#endif // USE_SYCL
