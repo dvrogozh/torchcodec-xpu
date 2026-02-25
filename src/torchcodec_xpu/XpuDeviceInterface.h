@@ -9,7 +9,7 @@ namespace facebook::torchcodec {
 
 class XpuDeviceInterface : public DeviceInterface {
  public:
-  XpuDeviceInterface(const torch::Device& device);
+  XpuDeviceInterface(const StableDevice& device);
 
   virtual ~XpuDeviceInterface();
 
@@ -49,5 +49,7 @@ class XpuDeviceInterface : public DeviceInterface {
   // be created before decoding a new frame.
   FiltersContext prevFiltersContext_;
 };
+
+//constexpr auto kStableXPU = torch::headeronly::DeviceType::XPU;
 
 } // namespace facebook::torchcodec
