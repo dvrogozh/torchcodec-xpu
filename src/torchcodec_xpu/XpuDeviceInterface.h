@@ -53,11 +53,11 @@ class XpuDeviceInterface : public DeviceInterface {
   void convertAVFrameToFrameOutput_SYCL(
       UniqueAVFrame& avFrame,
       torch::Tensor& dst);
-  #endif
-
+  #else
   void convertAVFrameToFrameOutput_FilterGraph(
       UniqueAVFrame& avFrame,
       torch::Tensor& dst);
+  #endif
 };
 
 } // namespace facebook::torchcodec

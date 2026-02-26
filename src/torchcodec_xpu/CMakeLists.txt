@@ -35,7 +35,6 @@ pkg_check_modules(LIBVA REQUIRED IMPORTED_TARGET libva)
 function(make_torchcodec_xpu_libraries torchcodec_variant)
     set(libname "libtorchcodec_xpu${torchcodec_variant}")
     set(sources
-        #ColorConversionKernel.cpp
         XpuDeviceInterface.cpp)
 
     if($ENV{CXX} MATCHES "icpx")
@@ -62,16 +61,10 @@ function(make_torchcodec_xpu_libraries torchcodec_variant)
       PkgConfig::L0
     )
 
-    # Force SYCL device compilation
-    ##target_compile_options(${libname} PRIVATE -fsycl)
-    ##target_link_options(${libname} PRIVATE -fsycl)
-
-
-    # option to detect icpx compiler
     if(USE_SYCL)
+        target_compile_definitions(${libname} PRIVATE USE_SYCL=1)    
         target_compile_options(${libname} PRIVATE -fsycl)
         target_link_options(${libname} PRIVATE -fsycl)
-        target_compile_definitions(${libname} PRIVATE USE_SYCL=1)
     endif()
 
 

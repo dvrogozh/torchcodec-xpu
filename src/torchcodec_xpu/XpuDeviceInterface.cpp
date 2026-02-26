@@ -20,7 +20,6 @@
 #include "XpuDeviceInterface.h"
 
 extern "C" {
-#include <libswscale/swscale.h>
 #include <libavfilter/buffersink.h>
 #include <libavfilter/buffersrc.h>
 #include <libavutil/hwcontext_vaapi.h>
@@ -44,6 +43,7 @@ const int MAX_CONTEXTS_PER_GPU_IN_CACHE = -1;
 PerGpuCache<AVBufferRef, Deleterp<AVBufferRef, void, av_buffer_unref>>
     g_cached_hw_device_ctxs(MAX_XPU_GPUS, MAX_CONTEXTS_PER_GPU_IN_CACHE);
 
+#ifdef USE_SYCL
 bool to_bool(std::string str) {
     static const std::unordered_map<std::string, bool> bool_map = {
         {"1", true},  {"0", false},
@@ -57,6 +57,7 @@ bool to_bool(std::string str) {
     }
     return false;
 }
+#endif
 
 bool use_sycl_color_conversion_kernel() {
   #ifndef USE_SYCL
@@ -180,8 +181,8 @@ void deleter(DLManagedTensor* self) {
   std::unique_ptr<DLManagedTensor> tensor(self);
   std::unique_ptr<xpuManagerCtx> context((xpuManagerCtx*)self->manager_ctx);
   zeMemFree(context->zeCtx, self->dl_tensor.data);
-  //free(self->dl_tensor.shape);
-  //free(self->dl_tensor.strides);
+  free(self->dl_tensor.shape);
+  free(self->dl_tensor.strides);
 }
 
 torch::Tensor AVFrameToTensor(
@@ -282,7 +283,7 @@ torch::Tensor AVFrameToTensor(
 VADisplay getVaDisplayFromAV(UniqueAVFrame& avFrame) {
   AVHWFramesContext* hwfc = (AVHWFramesContext*)avFrame->hw_frames_ctx->data;
   AVHWDeviceContext* hwdc = hwfc->device_ctx;
-  AVVAAPIDeviceContext* vactx = (AVVAAPIDeviceContext*)hwdc->hwctx;
+ AVVAAPIDeviceContext* vactx = (AVVAAPIDeviceContext*)hwdc->hwctx;
   return vactx->display;
 }
 
@@ -323,7 +324,6 @@ void XpuDeviceInterface::convertAVFrameToFrameOutput(
   #else 
     VLOG(1) << "Using VAAPI filter graph backend for conversion";
     convertAVFrameToFrameOutput_FilterGraph(avFrame, dst);
-  
   #endif
 
   auto end = std::chrono::high_resolution_clock::now();
@@ -333,59 +333,10 @@ void XpuDeviceInterface::convertAVFrameToFrameOutput(
           << " took: " << duration.count() << "us" << std::endl;
 }
 
-void XpuDeviceInterface::convertAVFrameToFrameOutput_FilterGraph(
-    UniqueAVFrame& avFrame,
-    torch::Tensor& dst) {
-  auto frameDims = FrameDims(avFrame->height, avFrame->width);
-
-  // We need to compare the current frame context with our previous frame
-  // context. If they are different, then we need to re-create our colorspace
-  // conversion objects. We create our colorspace conversion objects late so
-  // that we don't have to depend on the unreliable metadata in the header.
-  // And we sometimes re-create them because it's possible for frame
-  // resolution to change mid-stream. Finally, we want to reuse the colorspace
-  // conversion objects as much as possible for performance reasons.
-  enum AVPixelFormat frameFormat =
-      static_cast<enum AVPixelFormat>(avFrame->format);
-  FiltersContext filtersContext;
-
-  filtersContext.inputWidth = avFrame->width;
-  filtersContext.inputHeight = avFrame->height;
-  filtersContext.inputFormat = frameFormat;
-  filtersContext.inputAspectRatio = avFrame->sample_aspect_ratio;
-  // Actual output color format will be set via filter options
-  filtersContext.outputFormat = AV_PIX_FMT_VAAPI;
-  filtersContext.timeBase = timeBase_;
-  filtersContext.hwFramesCtx.reset(av_buffer_ref(avFrame->hw_frames_ctx));
-
-  std::stringstream filters;
-  filters << "scale_vaapi=" << frameDims.width << ":" << frameDims.height;
-  // CPU device interface outputs RGB in full (pc) color range.
-  // We are doing the same to match.
-  filters << ":format=rgba:out_range=pc";
-
-  filtersContext.filtergraphStr = filters.str();
-
-  if (!filterGraphContext_ || prevFiltersContext_ != filtersContext) {
-    filterGraphContext_ =
-        std::make_unique<FilterGraph>(filtersContext, videoStreamOptions_);
-    prevFiltersContext_ = std::move(filtersContext);
-  }
-
-  // We convert input to the RGBX color format with VAAPI getting WxHx4
-  // tensor on the output.
-  UniqueAVFrame filteredAVFrame = filterGraphContext_->convert(avFrame);
-
-  TORCH_CHECK_EQ(filteredAVFrame->format, AV_PIX_FMT_VAAPI);
-
-  torch::Tensor dst_rgb4 = AVFrameToTensor(device_, filteredAVFrame);
-  dst.copy_(dst_rgb4.narrow(2, 0, 3));
-}
-
-void XpuDeviceInterface::convertAVFrameToFrameOutput_SYCL(
+#ifdef USE_SYCL
+  void XpuDeviceInterface::convertAVFrameToFrameOutput_SYCL(
     UniqueAVFrame& frame,
     torch::Tensor& dst) {
-  #ifdef USE_SYCL
       TORCH_CHECK_EQ(frame->format, AV_PIX_FMT_VAAPI);
       VADRMPRIMESurfaceDescriptor desc{};
       VAStatus sts = vaExportSurfaceHandle(
@@ -445,12 +396,58 @@ void XpuDeviceInterface::convertAVFrameToFrameOutput_SYCL(
           desc.layers[0].pitch[0],
           false);
 
-      zeMemFree(context->zeCtx, usm_ptr);
-            
-  #else
-        TORCH_CHECK(false, "SYCL kernel support is not in use");
-  #endif
+      zeMemFree(context->zeCtx, usm_ptr);            
 }
+#else
+    void XpuDeviceInterface::convertAVFrameToFrameOutput_FilterGraph(
+    UniqueAVFrame& avFrame,
+    torch::Tensor& dst) {
+      auto frameDims = FrameDims(avFrame->height, avFrame->width);
+
+      // We need to compare the current frame context with our previous frame
+      // context. If they are different, then we need to re-create our colorspace
+      // conversion objects. We create our colorspace conversion objects late so
+      // that we don't have to depend on the unreliable metadata in the header.
+      // And we sometimes re-create them because it's possible for frame
+      // resolution to change mid-stream. Finally, we want to reuse the colorspace
+      // conversion objects as much as possible for performance reasons.
+      enum AVPixelFormat frameFormat =
+          static_cast<enum AVPixelFormat>(avFrame->format);
+      FiltersContext filtersContext;
+
+      filtersContext.inputWidth = avFrame->width;
+      filtersContext.inputHeight = avFrame->height;
+      filtersContext.inputFormat = frameFormat;
+      filtersContext.inputAspectRatio = avFrame->sample_aspect_ratio;
+      // Actual output color format will be set via filter options
+      filtersContext.outputFormat = AV_PIX_FMT_VAAPI;
+      filtersContext.timeBase = timeBase_;
+      filtersContext.hwFramesCtx.reset(av_buffer_ref(avFrame->hw_frames_ctx));
+
+      std::stringstream filters;
+      filters << "scale_vaapi=" << frameDims.width << ":" << frameDims.height;
+      // CPU device interface outputs RGB in full (pc) color range.
+      // We are doing the same to match.
+      filters << ":format=rgba:out_range=pc";
+
+      filtersContext.filtergraphStr = filters.str();
+
+      if (!filterGraphContext_ || prevFiltersContext_ != filtersContext) {
+        filterGraphContext_ =
+            std::make_unique<FilterGraph>(filtersContext, videoStreamOptions_);
+        prevFiltersContext_ = std::move(filtersContext);
+      }
+
+      // We convert input to the RGBX color format with VAAPI getting WxHx4
+      // tensor on the output.
+      UniqueAVFrame filteredAVFrame = filterGraphContext_->convert(avFrame);
+
+      TORCH_CHECK_EQ(filteredAVFrame->format, AV_PIX_FMT_VAAPI);
+
+      torch::Tensor dst_rgb4 = AVFrameToTensor(device_, filteredAVFrame);
+      dst.copy_(dst_rgb4.narrow(2, 0, 3));
+    }
+#endif
 
 // inspired by https://github.com/FFmpeg/FFmpeg/commit/ad67ea9
 // we have to do this because of an FFmpeg bug where hardware decoding is not

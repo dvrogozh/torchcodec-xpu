@@ -2,7 +2,6 @@
 
 #include "ColorConversionKernel.h"
 #include <algorithm> // For std::clamp
-#include <cmath>
 
 namespace facebook::torchcodec {
 
